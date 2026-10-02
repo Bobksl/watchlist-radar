@@ -1,5 +1,6 @@
 """Render one radar run as a static page: stocks to watch, watchlist, earnings, VCP, squeezes, news."""
 import datetime as dt
+from decimal import Decimal
 from html import escape
 from zoneinfo import ZoneInfo
 
@@ -73,7 +74,8 @@ def news_list(items, limit=3):
         return ""
     lis = "".join(
         f'<li><a href="{escape(n["url"])}" target="_blank" rel="noopener">{escape(n["title"])}</a>'
-        f'<div class="source">moomoo news · {when(n["ts"])}'
+        + (f'<div class="meta">{escape(n["why"])}</div>' if n.get("why") else "")
+        + f'<div class="source">moomoo news · {when(n["ts"])}'
         + "".join(f'<span class="chip">{escape(t)}</span>' for t in n["tags"]) + "</div></li>"
         for n in items if n["url"].startswith("https://"))
     return f'<ul class="news">{lis}</ul>'
@@ -87,7 +89,124 @@ def pick_card(r):
     return (f'<div class="card"><h3><span>{escape(r["ticker"])} {star}</span>'
             f'<span>${r["last_price"]:,.2f} <span class="{cls}">{pct(chg, True)}</span></span></h3>'
             f'<div class="meta">{escape(str(r.get("name") or ""))} · {escape(str(r.get("plate") or ""))}'
-            f' · {r["points"]:g} pts</div><ul>{why}</ul>{news_list(r.get("news", []))}</div>')
+            f' · {r["points"]:g} pts</div>{brief(r)}<ul>{why}</ul>{levels(r)}{card_line(r.get("card"))}'
+            f'{news_list(r.get("news", []))}</div>')
+
+
+CHECK_NAMES = {"historical_facts": "Historical facts", "target_arithmetic": "Target arithmetic",
+               "implied_assumptions": "Implied assumptions", "guidance_record": "Guidance record",
+               "target_distribution": "Target distribution"}
+
+
+def verdict_counts(check):
+    counts = dict(check.get("licensed_counts") or {})
+    for c in check["claims"]:
+        counts[c["verdict"]] = counts.get(c["verdict"], 0) + 1
+    return ", ".join(f"{n} {v}" for v, n in sorted(counts.items()))
+
+
+def card_line(card):
+    """One-line Street Validator summary for a pick card."""
+    if not card:
+        return ""
+    parts = [f'{CHECK_NAMES.get(c["name"], c["name"])} {c["status"]}'
+             + (f' ({verdict_counts(c)})' if verdict_counts(c) else "")
+             for c in card["checks"] if c["status"] != "not_supplied"]
+    skipped = sum(c["status"] == "not_supplied" for c in card["checks"])
+    text = "; ".join(parts) + (f"; {skipped} checks not supplied" if skipped else "")
+    return (f'<p class="source">Street Validator ({escape(card["as_of"])}): {escape(text)} · '
+            f'<a href="#validator-{escape(card["ticker"])}">details</a></p>')
+
+
+def show_value(claimed):
+    """A decimal string as written by the validator; formatted without passing through float."""
+    d = Decimal(claimed["value"])
+    if claimed["unit"] == "USD":
+        return f"${d / 10 ** 9:,.2f}bn" if abs(d) >= 10 ** 9 else f"${d:,}"
+    return f'{d:,} {escape(claimed["unit"])}'
+
+
+def validator_html(cards, local):
+    if not cards:
+        return '<div class="wrap"><div class="empty">No validator card for any name in today\'s universe.</div></div>'
+    blocks = []
+    for t, card in sorted(cards.items()):
+        checks = []
+        for c in card["checks"]:
+            rows = []
+            for cl in c["claims"]:
+                src = cl["source"]
+                meas = "; ".join(f'{m["name"].replace("_", " ")} {m["value"]}{m["unit"] if m["unit"] in ("%", "x") else " " + m["unit"]}'
+                                 for m in cl.get("measurements", []))
+                link = src["link"]
+                where = (f'<a href="{escape(link)}" target="_blank" rel="noopener">{escape(src["publisher"])}</a>'
+                         if link.startswith("https://") else escape(src["publisher"]))
+                rows.append(f'<tr><td class="l">{escape(cl["subject"])}</td><td>{show_value(cl["claimed"])}</td>'
+                            f'<td class="l"><b>{escape(cl["verdict"])}</b></td><td class="l">{escape(cl["reason"])}'
+                            + (f'<div class="source">{escape(meas)}</div>' if meas else "")
+                            + f'</td><td class="l">{where} {escape(src["date"])}, {escape(src["locator"])}'
+                            f'{" (licensed)" if src.get("licence") == "licensed" else ""}</td></tr>')
+            hidden = c.get("licensed_counts")
+            note = (f'<div class="empty">Licensed source: {sum(hidden.values())} claim(s), '
+                    f'{escape(", ".join(f"{n} {v}" for v, n in sorted(hidden.items())))}. '
+                    f'Values shown on the local page only.</div>') if hidden else ""
+            body = (f'<div class="wrap"><table><thead><tr><th class="l">Claim</th><th>Claimed</th><th class="l">Verdict</th>'
+                    f'<th class="l">Reason</th><th class="l">Source</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+                    if rows else "")
+            checks.append(f'<h3 style="font-size:15px;margin:14px 0 6px">{c["check"]}. '
+                          f'{escape(CHECK_NAMES.get(c["name"], c["name"]))}: <span class="chip">{escape(c["status"])}</span></h3>'
+                          f'{body}{note}')
+        blocks.append(f'<div class="card" id="validator-{escape(t)}" style="margin-bottom:12px"><h3><span>{escape(t)}</span>'
+                      f'<span class="meta">computed {escape(card["as_of"])} · filings to {escape(card["facts_as_of"])}'
+                      f' · {escape(card["spec"])}</span></h3>{"".join(checks)}</div>')
+    scope = ("Local page: licensed claim values shown." if local
+             else "Public page: claims from licensed sources are reduced to verdict counts.")
+    return f'<p class="note">{scope}</p>' + "".join(blocks)
+
+
+def brief(r):
+    return f'<p style="margin:8px 0 0"><b>{escape(r["news_brief"])}</b></p>' if r.get("news_brief") else ""
+
+
+def levels(r):
+    """Reference prices from completed bars, as distance from the live price."""
+    px = r.get("last_price")
+    if not px or r.get("hi20") is None:
+        return ""
+    parts = [f'20-day high ${r["hi20"]:,.2f} ({r["hi20"] / px - 1:+.1%})',
+             f'20-day low ${r["lo20"]:,.2f} ({r["lo20"] / px - 1:+.1%})',
+             f'ATR ${r["atr14"]:,.2f} ({r["atr14"] / px:.1%})']
+    if r.get("vcp_pivot"):
+        piv, low = r["vcp_pivot"], r["vcp_last_low"]
+        plan = f'VCP pivot ${piv:,.2f} ({piv / px - 1:+.1%}), coil low ${low:,.2f} ({low / px - 1:+.1%})'
+        if piv > low:  # runner exit from the VCP study: stop at the coil low, 3R arms the trailing stop
+            plan += f', 3R ${piv + 3 * (piv - low):,.2f} arms a trailing stop'
+        parts.insert(0, plan)
+    if r.get("implied_move"):
+        m = r["implied_move"]
+        parts.insert(0, f'earnings range ${px * (1 - m):,.2f} to ${px * (1 + m):,.2f}')
+    return f'<p class="source">Levels: {escape(" · ".join(parts))}</p>'
+
+
+def scoreboard_html(board):
+    """Past picks and how each flag's names moved vs the typical name in the same run."""
+    if not board or not board["picks"]:
+        return ('<div class="wrap"><div class="empty">No earlier run has a completed session after it yet. '
+                'Results appear from the next run onward.</div></div>')
+    names = {"pick": "Stocks to watch", "earnings": "Earnings soon", "peer_earnings": "Peer reports",
+             "vcp": "VCP coil", "squeeze": "Squeeze", "news": "Material news", "mover": "Moving on the day",
+             "quiet_volume": "Quiet heavy volume"}
+    flag_rows = ["<tr>" + f'<td class="l">{escape(names.get(f["flag"], f["flag"]))}</td>'
+                 + "".join(num_cell(f[f"ratio_{h}"], f'{f[f"ratio_{h}"]:.2f}x' if f[f"ratio_{h}"] else "—")
+                           + num_cell(f[f"n_{h}"], str(f[f"n_{h}"])) for h in (1, 5)) + "</tr>"
+                 for f in sorted(board["flags"], key=lambda f: -(f["ratio_1"] or 0))]
+    pick_rows = ["<tr>" + f'<td class="l">{escape(p["run"])}</td><td class="l"><b>{escape(p["ticker"])}</b></td>'
+                 f'<td class="l">{escape(", ".join(names.get(f, f) for f in p["flags"]))}</td>'
+                 + signed_cell(p.get("ret_1")) + signed_cell(p.get("ret_5")) + "</tr>"
+                 for p in board["picks"][:25]]
+    return (table(["Flag", "Next session vs typical", "n", "5 sessions vs typical", "n"], flag_rows, "")
+            + '<div style="height:12px"></div>'
+            + table(["Run (ET)", "Pick", "Flags", "Next session", "5 sessions"], pick_rows, ""))
 
 
 def table(headers, rows, empty):
@@ -103,8 +222,9 @@ def ticker_cell(r):
     return f'<td class="l" data-v="{escape(r["ticker"])}"><b>{escape(r["ticker"])}</b>{star}</td>'
 
 
-def render(run):
-    rows = run["rows"]
+def render(run, local=False):
+    cards = run.get("cards") or {}
+    rows = [{**r, "card": cards.get(r["ticker"])} for r in run["rows"]]
     by = {r["ticker"]: r for r in rows}
     picks = [by[t] for t in run["picks"]]
 
@@ -138,6 +258,7 @@ def render(run):
         + num_cell(r["vcp_pivot"], f'${r["vcp_pivot"]:,.2f}')
         + num_cell(r.get("vcp_vol_dryup_ratio"), f'{r["vcp_vol_dryup_ratio"]:.2f}' if r.get("vcp_vol_dryup_ratio") else "—")
         + f'<td class="l">{"yes" if r.get("vcp_stage2") else "no"}</td>'
+        + f'<td class="l">{ {True: "pass", False: "fail"}.get(r.get("vcp_leg_floor"), "n/a") }</td>'
         + num_cell(r.get("vcp_score"), f'{r["vcp_score"]:.2f}' if r.get("vcp_score") is not None else "—") + "</tr>"
         for r in vcp]
 
@@ -156,7 +277,7 @@ def render(run):
         if items:
             news_blocks.append(f'<div class="card"><h3><span>{escape(r["ticker"])}</span>'
                                f'<span class="meta">{escape(str(r.get("name") or ""))}</span></h3>'
-                               f'{news_list(items, limit=6)}</div>')
+                               f'{brief(r)}{news_list(items, limit=6)}</div>')
 
     w = run["weights"]
     return f"""<!doctype html>
@@ -168,11 +289,17 @@ def render(run):
 technical flags on completed bars to {run["bar_date"]} · {run["universe"]} names scanned ({run["with_history"]} with history)</div>
 
 <h2>Stocks to watch</h2>
-<p class="note">Names most likely to move in the next few sessions, ranked by flags: earnings soon ({w["earnings"]} pts),
+<p class="note">Names most likely to move in the next few sessions, ranked by flags: earnings soon ({w["earnings"]} pts), a theme peer reporting ({w.get("peer_earnings", 0)}),
 an actionable VCP coil ({w["vcp_actionable"]}; other VCP {w["vcp"]}), a volatility squeeze ({w["squeeze"]}),
 material news in 48h ({w["news"]}, +{w["news_multi"]} if broad), moving today ({w["mover"]}), heavy volume on a quiet
 day ({w["quiet_volume"]}), on your watchlist ({w["watchlist"]}). A pick needs at least 2 points from flags.</p>
 <div class="cards">{"".join(pick_card(r) for r in picks) or '<div class="card">No name reached the threshold today.</div>'}</div>
+
+<h2>Scoreboard: how earlier flags moved</h2>
+<p class="note">From each earlier run's price to the close 1 and 5 sessions later. "vs typical" = the flag's average
+absolute move divided by the median absolute move of all names in the same run, pooled over the last 10 runs.
+Above 1.00x means the flag found bigger movers than average. Direction is shown for picks only.</p>
+{scoreboard_html(run.get("scoreboard"))}
 
 <h2>Your watchlist</h2>
 {table(["Ticker", "Price", "Today", "Vol vs usual", "Off 52w high", "20d vol", "Earnings", "VCP", "BB width pct",
@@ -186,17 +313,28 @@ Past day-1 moves cover reports in the last 2 years (dates from Yahoo Finance). R
 
 <h2>VCP setups</h2>
 <p class="note">Admiralty VCP detector, unchanged: forming coils and confirmed bases still under their pivot.
-Actionable = at least 3 contractions and within 5% below the pivot. Dry-up = base volume / pre-base volume.</p>
-{table(["Ticker", "Setup", "Legs", "Actionable", "Status", "Pivot", "Dry-up", "Trend stack", "Score"],
+Actionable = at least 3 contractions and within 5% below the pivot. Dry-up = base volume / pre-base volume.
+Leg floor (VCP study, 2 Oct 2026): every leg of a confirmed 2-leg base at least 2.5 ATR deep; 2-leg bases that
+fail it showed no edge over matched controls and earn no points. Not applied to 3+ legs, where it removed the
+best bases. The runner plan on pick cards is that study's best exit so far: stop at the coil low, no partial
+sale, 3R switches on a trailing stop (mean +0.55R per trade, 44% winners, 495 trades).</p>
+{table(["Ticker", "Setup", "Legs", "Actionable", "Status", "Pivot", "Dry-up", "Trend stack", "Leg floor", "Score"],
        vcp_rows, "No coils today.")}
+
+<h2 id="validator">Street Validator</h2>
+<p class="note">Claims about these companies checked against SEC filings and their own arithmetic by the Street
+Validator (Equity Filings RAG). Verdicts: confirmed, contradicted, unverifiable. The validator states no view on
+the stock.</p>
+{validator_html(run.get("cards"), local)}
 
 <h2>Volatility squeezes</h2>
 <p class="note">20-day Bollinger width in the narrowest {run["squeeze_pct"]:.0%} of the last 6 months. NR7 = narrowest daily range of 7 sessions.</p>
 {table(["Ticker", "BB width pct", "NR7", "20d vol", "Off 52w high", "Price", "Group"], sq_rows, "No squeezes today.")}
 
 <h2>Material news, last 48 hours</h2>
-<p class="note">Checked for the watchlist and every flagged name. Tags come from headline keywords; law-firm ads and
-market-wrap roundups are dropped.</p>
+<p class="note">Checked for the watchlist and every flagged name. Law-firm ads and market-wrap roundups are dropped
+by keyword; relevance and tags checked by {escape(run.get("news_check") or "keywords")}. Summaries are AI-drafted
+from the headlines only; follow the link for details.</p>
 <div class="cards">{"".join(news_blocks) or '<div class="card">No material news found.</div>'}</div>
 
 <p class="note" style="margin-top:32px">Sources: universe and live quotes from moomoo OpenD; daily bars, past earnings
