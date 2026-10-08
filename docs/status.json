@@ -1,11 +1,13 @@
 {
-  "last_attempt": "2026-10-08T05:55:23.736126+00:00",
+  "last_attempt": "2026-10-08T14:12:10.663367+00:00",
   "scan": "success",
   "publication": "pending",
   "push_attempts": 0,
-  "last_success": "2026-10-08T06:00:42.409678+00:00",
-  "run": "20261008_0155",
+  "last_success": "2026-10-08T14:17:51.216175+00:00",
+  "run": "20261008_1012",
   "error": null,
   "manual_attempt_session": "2026-10-08",
-  "manual_scan_before_scheduled_window": true
+  "manual_scan_before_scheduled_window": true,
+  "last_push": "2026-10-08T06:03:46.358964+00:00",
+  "attempt_session": "2026-10-08"
 }
