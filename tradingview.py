@@ -10,8 +10,9 @@ from urllib.parse import urlencode
 
 # Verified against each official symbol page on 2026-10-08; imports do not extend this registry.
 SYMBOLS = {ticker: f"NASDAQ:{ticker}" for ticker in ("ASML", "SNDK", "CRWV", "ADEA", "AAPL")}
+SYMBOLS['NOW'] = 'NYSE:NOW'
 SYMBOL_SOURCES = {
-    ticker: f"https://www.tradingview.com/symbols/NASDAQ-{ticker}/" for ticker in SYMBOLS
+    ticker: f"https://www.tradingview.com/symbols/{symbol.replace(':', '-')}/" for ticker, symbol in SYMBOLS.items()
 }
 INTERVALS = {"D", "15", "5", "1"}
 TICKER = re.compile(r"[A-Z][A-Z0-9]*(?:[.-][A-Z0-9]+)?\Z")

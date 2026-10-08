@@ -49,9 +49,23 @@ a:focus-visible, button:focus-visible, select:focus-visible, textarea:focus-visi
 .tv-panel summary { cursor:pointer; font-weight:600; }
 .tv-panel textarea { display:block; width:100%; margin-top:8px; padding:8px; color:var(--ink);
   background:var(--bg); border:1px solid var(--line); font:13px/1.5 monospace; }
+.overview { margin:16px 0; padding:16px; background:var(--panel); border:1px solid var(--line); }
+nav { display:flex; flex-wrap:wrap; gap:8px 16px; margin:16px 0; }
+.lane-title { font-size:16px; margin:20px 0 8px; }
+input[type=search] { padding:8px; max-width:100%; background:var(--panel); color:var(--ink); border:1px solid var(--line); font:inherit; }
+input:focus-visible, summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.card details { margin-top:12px; } summary { cursor:pointer; }
+[hidden] { display:none !important; }
 """
 
 TRADINGVIEW_JS = """
+document.getElementById('watchlist-search').addEventListener('input', event => {
+  const query = event.target.value.trim().toUpperCase(); let count = 0;
+  document.querySelectorAll('#watchlist-table tbody tr').forEach(row => {
+    row.hidden = !row.cells[0].textContent.toUpperCase().includes(query); if (!row.hidden) count++;
+  });
+  document.getElementById('watchlist-count').textContent = count+' watched stocks shown';
+});
 document.getElementById('tv-interval').addEventListener('change', event => {
   document.querySelectorAll('a[data-tv-intraday]').forEach(link => {
     const url = new URL(link.href); url.searchParams.set('interval', event.target.value); link.href = url.href;
@@ -93,7 +107,7 @@ Your saved layout and indicators are managed in TradingView; this is not an acco
 <div class="tv-controls"><button id="tv-copy"{' disabled' if not text else ''}>Copy shortlist</button>{download}
 <span id="tv-copy-status" role="status" aria-live="polite"></span></div>
 <p class="note">{warning} Native TXT import depends on your TradingView plan; otherwise add symbols manually.
-Only the five verified pilot mappings are linked initially.</p></details>'''
+Only verified exchange mappings are linked.</p></details>'''
 
 SORT_JS = """
 document.querySelectorAll('table.sortable th').forEach((th, col) => th.addEventListener('click', () => {
@@ -147,8 +161,9 @@ def pick_card(r):
     return (f'<div class="card"><h3><span>{escape(r["ticker"])} {star}</span>'
             f'<span>${r["last_price"]:,.2f} <span class="{cls}">{pct(chg, True)}</span></span></h3>'
             f'<div class="meta">{escape(str(r.get("name") or ""))} · {escape(str(r.get("plate") or ""))}'
-            f' · {r["points"]:g} pts</div>{brief(r)}<ul>{why}</ul>{levels(r)}{card_line(r.get("card"))}'
-            f'{news_list(r.get("news", []))}{chart_actions(r["ticker"])}</div>')
+            f' · {r["points"]:g} pts</div>{brief(r)}<ul>{why}</ul>{chart_actions(r["ticker"])}'
+            f'<details><summary>Levels, evidence and news</summary>{levels(r)}{card_line(r.get("card"))}'
+            f'{news_list(r.get("news", []))}</details></div>')
 
 
 CHECK_NAMES = {"historical_facts": "Historical facts", "target_arithmetic": "Target arithmetic",
@@ -284,11 +299,45 @@ def ticker_cell(r):
     return f'<td class="l" data-v="{ticker}"><b>{label}</b>{star}</td>'
 
 
-def render(run, local=False):
+def private_research_html(research):
+    if not research:
+        return ''
+    blocks = []
+    for item in research.get('newsletters', []):
+        url = str(item.get('article_url', ''))
+        title = escape(str(item.get('subject', 'Unknown title')))
+        link = f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer">{title}</a>' if url.startswith('https://seekingalpha.com/') else title
+        claims = ''.join('<li>'+escape(str(c))+'</li>' for c in item.get('claims', [])[:12])
+        blocks.append(f'<div class="card"><h3>{link}</h3><p class="meta">{escape(str(item.get("author") or "Author unknown"))} · {escape(str(item.get("article_date_text") or item.get("message_date_header") or "Date unknown"))} · {escape(str(item.get("evidence_level", "unknown")))}</p>'
+                      f'<p class="note">Company attribution requires review; newsletter alert tickers can refer to another company. Licence unknown; claims unverified.</p>'
+                      f'<details><summary>Source summary</summary><ul>{claims}</ul></details></div>')
+    for report in research.get('reports', []):
+        data = report.get('data', {})
+        authors = ', '.join(str(a) for a in data.get('analyst_report_by_line') or [])
+        blocks.append(f'<div class="card"><h3>{escape(report["ticker"])} · Morningstar</h3><p>{escape(authors)} · Report {escape(str(data.get("analyst_report_update_time_str") or "date unknown"))}</p>'
+                      f'<p class="note">Retrieved {escape(report["retrieved_utc"])}. Personal access verified; redistribution rights unknown. Analyst forecasts remain unverified and separate from SEC facts.</p></div>')
+    return '<h2>Private research queue</h2><p class="note">Local only. These sources do not affect attention scores. Missing/unreadable evidence files: '+str(len(research.get('unavailable', [])))+'.</p><div class="cards">'+''.join(blocks)+'</div>'
+
+
+def render(run, local=False, research=None):
     cards = run.get("cards") or {}
     rows = [{**r, "card": cards.get(r["ticker"])} for r in run["rows"]]
     by = {r["ticker"]: r for r in rows}
     picks = [by[t] for t in run["picks"]]
+    watched = [r for r in picks if r.get('watchlist')]
+    discoveries = [r for r in picks if not r.get('watchlist')]
+    changes = run.get('changes') or {'status': 'no_previous_snapshot'}
+    if changes['status'] == 'comparable':
+        change_note = ('Compared with '+changes['since']+' ET. Entered shortlist: '+
+                       (', '.join(changes['entered']) or 'none')+'. Left: '+
+                       (', '.join(changes['left']) or 'none')+'.')
+    else:
+        change_note = 'Previous comparison unavailable: '+changes['status'].replace('_', ' ')+'.'
+    changed = changes.get('flags', {})
+    changed_note = '; '.join(t+': added '+(', '.join(v['added']) or 'none')+', removed '+
+                            (', '.join(v['removed']) or 'none') for t, v in changed.items() if t in run['picks'])
+    moves = [r['chg'] for r in rows if r.get('chg') is not None]
+    breadth = f'{sum(v > 0 for v in moves)} advancing · {sum(v < 0 for v in moves)} declining · {sum(v == 0 for v in moves)} unchanged · {len(rows)-len(moves)} missing'
 
     wl = sorted((r for r in rows if r.get("watchlist")), key=lambda r: -r["points"])
     wl_rows = [
@@ -361,7 +410,7 @@ function health(s) {
 }
 async function poll() {
   try {
-    const response = await fetch('status.json?t='+Date.now(), {cache:'no-store'});
+    const response = await fetch(STATUS_URL+'?t='+Date.now(), {cache:'no-store'});
     if (!response.ok) throw new Error('status unavailable');
     const s = await response.json();
     if (s.scan === 'success' && s.run && s.run > runId)
@@ -371,12 +420,14 @@ async function poll() {
 }
 health(null); poll(); setInterval(poll, 60000);
 """.replace("GENERATED", json.dumps(generated)).replace("DEADLINE", json.dumps(run.get("stale_after"))).replace(
-        "RUN_ID", json.dumps((run.get("generated_et") or "").replace("-", "").replace(" ", "_").replace(":", "")))
+        "RUN_ID", json.dumps((run.get("generated_et") or "").replace("-", "").replace(" ", "_").replace(":", ""))).replace(
+        "STATUS_URL", json.dumps('../docs/status.json' if local else 'status.json'))
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Watchlist Radar</title><style>{CSS}</style></head>
 <body><main>
 <h1>Watchlist Radar</h1>
+<nav aria-label="Dashboard sections"><a href="#attention">Attention</a><a href="#watchlist">Watchlist</a><a href="#earnings">Earnings</a><a href="#setups">Technical setups</a><a href="#validator">Street Validator</a></nav>
 <p class="note" id="refresh-health" role="status">Snapshot freshness requires JavaScript. Last scan: {escape(generated or 'unknown')}.</p>
 <div class="meta">Run {run["generated_hkt"]} HKT ({run["generated_et"]} ET) · live quotes to {escape(run["quote_time"])} ET ·
 technical flags on completed bars to {run["bar_date"]} · {run["universe"]} names scanned ({run["with_history"]} with history)</div>
@@ -384,31 +435,43 @@ technical flags on completed bars to {run["bar_date"]} · {run["universe"]} name
 New snapshots convert adjusted technical levels to raw-equivalent prices using the latest completed bar adjustment.
 Legacy snapshots may mix adjusted levels and raw quotes. Intraday corporate actions can invalidate this conversion.</p>
 
-<h2>Stocks to watch</h2>
+<div class="overview"><strong>Scanned-universe breadth</strong><p>{breadth}</p>
+<p class="note">This is the Radar universe, not a broad-market index. {escape(change_note)}</p>
+{('<p class="note">Shortlist flag changes: '+escape(changed_note)+'</p>') if changed_note else ''}</div>
+<h2 id="attention">Stocks to watch</h2>
 {tradingview_handoff(run["picks"])}
 <p class="note">Names most likely to move in the next few sessions, ranked by flags: earnings soon ({w["earnings"]} pts), a theme peer reporting ({w.get("peer_earnings", 0)}),
 an actionable VCP coil ({w["vcp_actionable"]}; other VCP {w["vcp"]}), a volatility squeeze ({w["squeeze"]}),
 material news in 48h ({w["news"]}, +{w["news_multi"]} if broad), moving today ({w["mover"]}), heavy volume on a quiet
 day ({w["quiet_volume"]}), on your watchlist ({w["watchlist"]}). A pick needs at least 2 points from flags.</p>
-<div class="cards">{"".join(pick_card(r) for r in picks) or '<div class="card">No name reached the threshold today.</div>'}</div>
+<h3 class="lane-title">From your watchlist · {len(watched)}</h3>
+<div class="cards">{"".join(pick_card(r) for r in watched) or '<p class="note">No watched name reached the shortlist.</p>'}</div>
+<h3 class="lane-title">Discoveries outside your watchlist · {len(discoveries)}</h3>
+<div class="cards">{"".join(pick_card(r) for r in discoveries) or '<p class="note">No outsider reached the shortlist.</p>'}</div>
+<p class="note">Global rank order: {escape(', '.join(run['picks']) or 'none')}. The lanes preserve this order within each group.</p>
 
 <h2>Scoreboard: how earlier flags moved</h2>
 <p class="note">From each earlier run's price to the close 1 and 5 sessions later. "vs typical" = the flag's average
 absolute move divided by the median absolute move of all names in the same run, pooled over the last 10 runs.
-Above 1.00x means the flag found bigger movers than average. Direction is shown for picks only.</p>
+Above 1.00x means the flag found bigger movers than average. Direction is shown for picks only.
+Saved flags remain frozen; archives without saved flags are labelled legacy unknown.</p>
 {scoreboard_html(run.get("scoreboard"))}
 
-<h2>Your watchlist</h2>
+<h2 id="watchlist">Your watchlist</h2>
+<label for="watchlist-search">Find a watched ticker</label> <input id="watchlist-search" type="search" placeholder="e.g. MU">
+<p class="note" id="watchlist-count" role="status" aria-live="polite">{len(wl)} watched stocks shown</p>
+<div id="watchlist-table">
 {table(["Ticker", "Price", "Today", "Vol vs usual", "Off 52w high", "20d vol", "Earnings", "VCP", "BB width pct",
         "News 48h", "Points"], wl_rows, "Watchlist is empty.")}
+</div>
 
-<h2>Earnings in the next few sessions</h2>
+<h2 id="earnings">Earnings in the next few sessions</h2>
 <p class="note">Implied move = at-the-money straddle on the first expiry after the report, as a share of price.
 Past day-1 moves cover reports in the last 2 years (dates from Yahoo Finance). Reports already reacted to today are left out.</p>
 {table(["Ticker", "Date", "When", "EPS est.", "Implied move", "Avg day-1 (2y)", "Up", "Last day-1", "Price"],
        earn_rows, "No reports in the universe in the next few sessions.")}
 
-<h2>VCP setups</h2>
+<h2 id="setups">VCP setups</h2>
 <p class="note">Admiralty VCP detector, unchanged: forming coils and confirmed bases still under their pivot.
 Actionable = at least 3 contractions and within 5% below the pivot. Dry-up = base volume / pre-base volume.
 Leg floor: every leg of a confirmed 2-leg base must be at least 2.5 ATR deep to earn points.
@@ -432,6 +495,7 @@ the stock.</p>
 by keyword; relevance and tags checked by {escape(run.get("news_check") or "keywords")}. Summaries are AI-drafted
 from the headlines only; follow the link for details.</p>
 <div class="cards">{"".join(news_blocks) or '<div class="card">No material items in available coverage; see skipped/failed checks above.</div>'}</div>
+{private_research_html(research) if local else ''}
 
 <p class="note" style="margin-top:32px">Sources: universe and live quotes from moomoo OpenD; daily bars, past earnings
 dates and options from Yahoo Finance (yfinance); earnings calendar from

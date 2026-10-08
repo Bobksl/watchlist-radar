@@ -275,7 +275,8 @@ def scoreboard(past_runs, frames, max_runs=10):
             m = moves.get(r["ticker"])
             if not m:
                 continue
-            flags = score(r)[2]
+            # Preserve the flags seen at collection, even when scoring rules change later.
+            flags = r['flags'] if 'flags' in r else ['legacy_unknown']
             for flag in flags + (["pick"] if r["ticker"] in past["picks"] else []):
                 for h, v in m.items():
                     if typical.get(h):
@@ -674,6 +675,7 @@ def run(watchlist, with_news=True):
         "bar_date": sq.bar_date.mode().iloc[0] if len(sq) else None,
         "universe": len(uni), "with_history": len(frames), "news_checked": with_news, "news_check": news_check,
         "weights": WEIGHTS, "squeeze_pct": SQUEEZE_PCT, "picks": picks, "rows": records,
+        "changes": scan_changes(records, picks, past_runs),
         "cards": {t: redact_card(c) for t, c in cards.items()},  # runs/ and docs/ are public
     }
     from daily import calendar, session_dates
@@ -684,7 +686,8 @@ def run(watchlist, with_news=True):
     result["scoreboard"] = board  # derived from past runs; recomputed every run, not stored
     from page import render
     public_page = render(result)
-    local_page = render({**result, "cards": cards}, local=True)
+    from research import load_private
+    local_page = render({**result, "cards": cards}, local=True, research=load_private())
     from daily import atomic_write
     atomic_write(HERE / "local" / "index.html", local_page)
     atomic_write(HERE / "runs" / f"{stamp}.json", public_json)
@@ -693,11 +696,29 @@ def run(watchlist, with_news=True):
     return stamp
 
 
+def scan_changes(rows, picks, past_runs):
+    """Compare saved flags only when both snapshots use the same weights."""
+    if not past_runs:
+        return {'status': 'no_previous_snapshot'}
+    past = max(past_runs, key=lambda p: p['generated_et'])
+    if past.get('weights') != WEIGHTS or any('flags' not in r for r in past['rows']):
+        return {'status': 'incomparable_rules_or_legacy'}
+    previous = {r['ticker']: r for r in past['rows']}
+    return {'status': 'comparable', 'since': past['generated_et'],
+            'entered': [t for t in picks if t not in past['picks']],
+            'left': [t for t in past['picks'] if t not in picks],
+            'flags': {r['ticker']: {'added': sorted(set(r['flags']) - set(previous[r['ticker']]['flags'])),
+                                   'removed': sorted(set(previous[r['ticker']]['flags']) - set(r['flags']))}
+                      for r in rows if r['ticker'] in previous
+                      and set(r['flags']) != set(previous[r['ticker']]['flags'])}}
+
+
 def publish(stamp, include_status=False):
     """Commit this run's page and record, then push to the GitHub remote."""
     import subprocess
     def git(*a):
         return subprocess.run(["git", *a], cwd=HERE, check=True, capture_output=True, text=True,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
                               timeout=120, env={**os.environ, "GIT_TERMINAL_PROMPT": "0",
                                                 "GCM_INTERACTIVE": "never"}).stdout.strip()
     # Reject unrelated unpushed commits: a push publishes history, not just this commit's paths.

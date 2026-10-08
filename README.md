@@ -44,6 +44,12 @@ trigger delay. Holidays/weekends are skipped; early closes are honored. Complete
 eligible 15 minutes after the actual exchange close. Nasdaq's forward window uses exchange sessions.
 Calendar dependency: `exchange_calendars==4.13.2`; unavailable/out-of-range calendar fails explicitly.
 
+The scheduled action uses `pythonw.exe` and `scheduler_launcher.py`, which appends stdout, stderr
+and failure tracebacks to ignored `local/scheduler.log`. Git subprocesses use Windows
+`CREATE_NO_WINDOW`. There is no scheduled PowerShell console. Existing task trigger/settings and
+permissions were preserved when the failed hidden PowerShell action was replaced on 8 October.
+The action-only backup is `local/task-before-pythonw.xml`; registration still refuses replacement.
+
 ```powershell
 # Manual due check through the task; usually skips outside the session.
 powershell -NoProfile -File .\schedule.ps1 -Action Run
@@ -100,6 +106,14 @@ Weights are hand-set. The **scoreboard** on the page measures them: for every ea
 name's move from its run-time price to the close 1 and 5 sessions later, and each flag's average
 absolute move relative to the typical name in that run (above 1.00x = the flag finds bigger movers).
 Technical flags use completed daily bars only; today's forming bar is dropped.
+Historical attribution uses saved flags, without rerunning today's scoring rules. Older archives
+without saved flags are labelled `legacy_unknown`; their measured returns remain available.
+
+The dashboard groups the existing attention shortlist into watchlist and discovery lanes,
+preserving global rank within each lane. It compares saved flags and shortlist membership against
+the previous snapshot only when weights match and saved flags exist. Breadth covers the scanned
+universe, not an index. The watched-ticker search filters the table locally; expanded details keep
+levels, validator evidence and news available without changing the ranking.
 
 Each pick card shows levels: earnings range from the implied move, VCP pivot and coil low,
 20-day high/low and ATR.
@@ -129,6 +143,7 @@ Pick cards link to daily candles for a YTD overview and configurable 15/5/1-minu
 single-day timing. Choose the YTD or 1D visible range in TradingView; the links do not synchronize
 your account, saved layout or built-in indicators. The initial verified exchange mappings cover
 ASML, SNDK, CRWV, ADEA and AAPL. Other symbols are visibly omitted rather than assigned an exchange.
+NOW is also verified as NYSE using its official TradingView symbol page.
 
 Copy or download the verified shortlist from the page. Native TXT import depends on your
 TradingView plan; manual symbol addition is the fallback. To bring a local ticker list into Radar:
@@ -141,6 +156,34 @@ C:\Python314\python.exe tradingview.py .\my-tradingview-list.txt --write
 The first command previews. The second validates, backs up the existing watchlist under ignored
 `local/`, then replaces `watchlist.txt`. It accepts bare US tickers or NASDAQ/NYSE/AMEX prefixes.
 It does not fetch your TradingView account. Official TradingView MCP requires Essential or above.
+
+## Private research acquisition
+
+`research.py` retrieves Morningstar research for the bounded MU/AVGO/ASML pilot through the
+installed moomoo skill's SDK script. It requires logged-in OpenD and that local skill installation.
+It records independent status per ticker, checks report identity, limits each request to 30 seconds
+and retains prior evidence if a request fails. No PDF download or redistribution occurs.
+
+```powershell
+C:\Python314\python.exe -B research.py
+# Exact EML or Gmail full-message JSON paths; PowerShell does not expand Python wildcard arguments.
+C:\Python314\python.exe -B newsletters.py .\local\research\gmail-message-id.json
+```
+
+The newsletter pilot accepts the two verified Seeking Alpha sender addresses, extracts bylines,
+article/message dates, summary bullets and canonical links, and deduplicates by article URL with
+message IDs retained. Sender filtering is not email authentication. Tracking redirects are decoded
+locally, without following login links. Promotions without a canonical article are refused.
+At most 30 supplied exports are ingested; raw connector exports remain in ignored local storage.
+Substack/other senders, semantic event deduplication and an unattended Gmail collector are pending.
+Gmail plugin access is used read-only in Codex; this script does not inherit its credentials.
+
+Private normalized evidence lives under `local/research/` and appears only on `local/index.html`.
+The public renderer rejects this queue even if passed private evidence. Sources do not change
+scores. Newsletter alerts do not establish the subject company; forecasts are not SEC facts.
+Morningstar access succeeded for all three pilot stocks on 8 October, but rights remain unknown.
+The current Street Validator intake cannot represent unknown licensing/independent research safely;
+no new real cards were produced. See `tasks/releases-2026-10-08.md` for the next bounded disposition.
 
 ## Data limits
 

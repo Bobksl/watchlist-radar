@@ -133,12 +133,14 @@ def test_scoreboard_measures_from_run_price():
     frames = {"A": frame([100, 110, 110, 110, 110, 121]), "B": frame([100, 101, 101, 101, 101, 101]),
               "C": frame([100, 99, 99, 99, 99, 99])}
     past = {"generated_et": "2026-09-21 12:28", "picks": ["A"], "rows": [
-        {"ticker": "A", "last_price": 100.0, "chg": 0.06, "volume_ratio": 2.0},     # flagged: mover
-        {"ticker": "B", "last_price": 100.0}, {"ticker": "C", "last_price": 100.0}]}
+        {"ticker": "A", "last_price": 100.0, "chg": 0.0, "volume_ratio": 1.0, "flags": ["mover"]},
+        {"ticker": "B", "last_price": 100.0, "flags": []}, {"ticker": "C", "last_price": 100.0, "flags": []}]}
     board = scoreboard([past], frames)
     pick = board["picks"][0]
     assert pick["ticker"] == "A" and np.isclose(pick["ret_1"], 0.10) and np.isclose(pick["ret_5"], 0.21)
     mover = next(f for f in board["flags"] if f["flag"] == "mover")
     assert np.isclose(mover["ratio_1"], 0.10 / 0.01) and mover["n_1"] == 1   # typical |move| is 1%
+    legacy = {**past, "rows": [{k: v for k, v in r.items() if k != 'flags'} for r in past['rows']]}
+    assert scoreboard([legacy], frames)['picks'][0]['flags'] == ['legacy_unknown']
     fresh = {"generated_et": "2026-09-28 12:00", "picks": ["A"], "rows": [{"ticker": "A", "last_price": 1.0}]}
     assert scoreboard([fresh], frames) == {"picks": [], "flags": []}      # no completed session yet

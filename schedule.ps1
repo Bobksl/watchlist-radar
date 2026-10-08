@@ -11,7 +11,10 @@ if ($Action -eq 'Register') {
     # Current interactive user: OpenD and local Git credentials belong to that session.
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
     $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
-    $scanAction = New-ScheduledTaskAction -Execute $Python -Argument ('-B "' + $daily + '"') -WorkingDirectory $PSScriptRoot
+    $pythonw = Join-Path (Split-Path -Parent $Python) 'pythonw.exe'
+    if (!(Test-Path -LiteralPath $pythonw)) { throw 'Console-free Python executable missing' }
+    $launcher = Join-Path $PSScriptRoot 'scheduler_launcher.py'
+    $scanAction = New-ScheduledTaskAction -Execute $pythonw -Argument ('-B "' + $launcher + '"') -WorkingDirectory $PSScriptRoot
     $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 15)
     $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 45) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $taskName -Action $scanAction -Trigger $trigger -Settings $settings -Principal $principal -Description 'Check every 15 min; one scan at/after 10:00 ET per NYSE session, automatic public artifact push.'
