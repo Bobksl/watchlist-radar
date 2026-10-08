@@ -163,6 +163,9 @@ It does not fetch your TradingView account. Official TradingView MCP requires Es
 installed moomoo skill's SDK script. It requires logged-in OpenD and that local skill installation.
 It records independent status per ticker, checks report identity, limits each request to 30 seconds
 and retains prior evidence if a request fails. No PDF download or redistribution occurs.
+Each distinct normalized report payload retains its first retrieval under ignored
+`local/research/snapshots/`; the latest record links to that file with payload and file hashes.
+These hashes detect local changes and do not establish publisher authenticity or publication rights.
 
 ```powershell
 C:\Python314\python.exe -B research.py
