@@ -1,5 +1,6 @@
 """Render one radar run as a static page: stocks to watch, watchlist, earnings, VCP, squeezes, news."""
 import datetime as dt
+import json
 from decimal import Decimal
 from html import escape
 from zoneinfo import ZoneInfo
@@ -280,13 +281,47 @@ def render(run, local=False):
                                f'{brief(r)}{news_list(items, limit=6)}</div>')
 
     w = run["weights"]
+    coverage = {}
+    for r in rows:
+        status = r.get("coverage", {}).get("news", "unknown_legacy")
+        coverage[status] = coverage.get(status, 0) + 1
+    coverage_note = escape(", ".join(f"{k}: {v}" for k, v in sorted(coverage.items())))
+    generated = run.get("generated_utc")
+    if not generated and run.get("generated_et"):
+        generated = dt.datetime.strptime(run["generated_et"], "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo("America/New_York")).isoformat()
+    freshness_js = """
+const generated = GENERATED, deadline = DEADLINE, runId = RUN_ID;
+const refreshNode = document.getElementById('refresh-health');
+function health(s) {
+  const stale = Date.now() > Date.parse(deadline || generated) + (deadline ? 0 : 36*3600000);
+  refreshNode.textContent = (stale ? 'STALE snapshot. ' : 'Snapshot current. ') +
+    (s && s.scan === 'failed' ? 'Latest scan failed: '+s.error+'. Last good content retained. ' : '') +
+    'Last successful scan: '+(generated || 'unknown')+'. Checks for updates every 60 seconds.';
+}
+async function poll() {
+  try {
+    const response = await fetch('status.json?t='+Date.now(), {cache:'no-store'});
+    if (!response.ok) throw new Error('status unavailable');
+    const s = await response.json();
+    if (s.scan === 'success' && s.run && s.run > runId)
+      { location.reload(); return; }
+    health(s);
+  } catch(e) { health(null); refreshNode.textContent += ' Refresh status unavailable.'; }
+}
+health(null); poll(); setInterval(poll, 60000);
+""".replace("GENERATED", json.dumps(generated)).replace("DEADLINE", json.dumps(run.get("stale_after"))).replace(
+        "RUN_ID", json.dumps((run.get("generated_et") or "").replace("-", "").replace(" ", "_").replace(":", "")))
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Watchlist Radar</title><style>{CSS}</style></head>
 <body><main>
 <h1>Watchlist Radar</h1>
+<p class="note" id="refresh-health" role="status">Snapshot freshness requires JavaScript. Last scan: {escape(generated or 'unknown')}.</p>
 <div class="meta">Run {run["generated_hkt"]} HKT ({run["generated_et"]} ET) · live quotes to {escape(run["quote_time"])} ET ·
 technical flags on completed bars to {run["bar_date"]} · {run["universe"]} names scanned ({run["with_history"]} with history)</div>
+<p class="note">News coverage — {coverage_note}. Skipped, failed and legacy checks do not establish absence of news.
+New snapshots convert adjusted technical levels to raw-equivalent prices using the latest completed bar adjustment.
+Legacy snapshots may mix adjusted levels and raw quotes. Intraday corporate actions can invalidate this conversion.</p>
 
 <h2>Stocks to watch</h2>
 <p class="note">Names most likely to move in the next few sessions, ranked by flags: earnings soon ({w["earnings"]} pts), a theme peer reporting ({w.get("peer_earnings", 0)}),
@@ -335,10 +370,10 @@ the stock.</p>
 <p class="note">Checked for the watchlist and every flagged name. Law-firm ads and market-wrap roundups are dropped
 by keyword; relevance and tags checked by {escape(run.get("news_check") or "keywords")}. Summaries are AI-drafted
 from the headlines only; follow the link for details.</p>
-<div class="cards">{"".join(news_blocks) or '<div class="card">No material news found.</div>'}</div>
+<div class="cards">{"".join(news_blocks) or '<div class="card">No material items in available coverage; see skipped/failed checks above.</div>'}</div>
 
 <p class="note" style="margin-top:32px">Sources: universe and live quotes from moomoo OpenD; daily bars, past earnings
 dates and options from Yahoo Finance (yfinance); earnings calendar from
 <a href="https://www.nasdaq.com/market-activity/earnings">Nasdaq</a>; news from moomoo news search, linked per item.
 Flags are hand-weighted and not yet validated against history. For research only; not investment advice.</p>
-</main><script>{SORT_JS}</script></body></html>"""
+</main><script>{SORT_JS}</script><script>{freshness_js}</script></body></html>"""

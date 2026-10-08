@@ -20,6 +20,7 @@ import html
 import json
 import os
 import re
+import socket
 import sys
 import time
 import urllib.error
@@ -94,6 +95,12 @@ NEWS_NOISE = re.compile(r"investor deadline|class action|law firm|shareholder al
 
 def load_universe(watchlist):
     """OpenD: plate members plus the watchlist, with a live snapshot for each."""
+    # The SDK constructor retries indefinitely when OpenD is not listening.
+    try:
+        with socket.create_connection(("127.0.0.1", 11111), timeout=3):
+            pass
+    except OSError as e:
+        raise RuntimeError("OpenD unavailable at 127.0.0.1:11111; start OpenD and log in before scanning") from e
     from moomoo import OpenQuoteContext, RET_OK
     q = OpenQuoteContext(host="127.0.0.1", port=11111)
     try:
@@ -138,7 +145,9 @@ def load_bars(tickers, now_ny):
     symbols = [yahoo(t) for t in tickers] + ["SPY"]
     raw = yf.download(symbols, period="2y", interval="1d", auto_adjust=False, group_by="ticker",
                       progress=False, threads=True)
-    session_done = now_ny.time() >= dt.time(16, 15)
+    from daily import session_bounds
+    bounds = session_bounds(now_ny.date())
+    session_done = bounds is None or now_ny >= bounds[1] + dt.timedelta(minutes=15)
     frames = {}
     for t in tickers + ["SPY"]:
         f = extract_yfinance_frame(raw, yahoo(t))
@@ -209,6 +218,7 @@ def bar_stats(frame):
     levels = {"bar_close": float(frame["raw_close"].iloc[-1]) if "raw_close" in frame else float(c.iloc[-1]),
               "hi20": float(frame["high"].iloc[-20:].max()), "lo20": float(frame["low"].iloc[-20:].min()),
               "atr14": float(tr.iloc[-14:].mean())}
+    levels["price_factor"] = levels["bar_close"] / float(c.iloc[-1])
     width = 4 * c.rolling(20).std() / c.rolling(20).mean()
     recent = width.iloc[-126:].dropna()
     bb_pct = float((recent <= recent.iloc[-1]).mean()) if len(recent) >= 60 else np.nan
@@ -283,7 +293,8 @@ def scoreboard(past_runs, frames, max_runs=10):
 def earnings_calendar(now_ny):
     """Nasdaq's public calendar: every US report dated today through the next few sessions."""
     rows = []
-    for day in pd.bdate_range(now_ny.date(), periods=EARNINGS_SESSIONS):
+    from daily import session_dates
+    for day in session_dates(now_ny.date(), EARNINGS_SESSIONS):
         url = f"https://api.nasdaq.com/api/calendar/earnings?date={day.date()}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=20) as r:
@@ -331,7 +342,8 @@ def earnings_detail(ticker, frame, event, today, spot):
     try:
         react = pd.Timestamp(event["date"])
         if event["when"] != "before open":
-            react += pd.offsets.BDay(1)
+            from daily import session_dates
+            react = session_dates(react.date() + dt.timedelta(days=1), 1)[0]
         t = yf.Ticker(yahoo(ticker))
         expiry = next((e for e in t.options if pd.Timestamp(e) >= react), None)
         if expiry:
@@ -339,7 +351,14 @@ def earnings_detail(ticker, frame, event, today, spot):
             legs = []
             for side in (chain.calls, chain.puts):
                 row = side.iloc[(side.strike - spot).abs().argmin()]
-                mid = (row.bid + row.ask) / 2 if row.bid > 0 and row.ask > 0 else row.lastPrice
+                traded = pd.Timestamp(row.lastTradeDate)
+                if traded.tzinfo is None:
+                    traded = traded.tz_localize("UTC")
+                if dt.datetime.now(dt.timezone.utc) - traded.to_pydatetime() > dt.timedelta(days=4):
+                    raise ValueError("stale option leg")
+                if not (0 < row.bid <= row.ask):
+                    raise ValueError("missing or crossed option bid/ask")
+                mid = (row.bid + row.ask) / 2
                 legs.append(float(mid))
             detail.update(expiry=expiry, implied_move=sum(legs) / spot)
     except Exception as e:
@@ -421,18 +440,30 @@ def llm_review(ticker, name, items, key):
 
 def apply_review(items, out):
     """Merge the model's verdicts into the headline list; returns (items, summary)."""
-    verdicts = {v.get("i"): v for v in out.get("items", []) if isinstance(v, dict)}
+    if not isinstance(out, dict) or not isinstance(out.get("items"), list):
+        raise ValueError("Invalid model response")
+    verdicts = {}
+    for v in out["items"]:
+        if (not isinstance(v, dict) or type(v.get("i")) is not int
+                or not 0 <= v["i"] < len(items) or v["i"] in verdicts
+                or type(v.get("about_company")) is not bool or type(v.get("material")) is not bool
+                or not isinstance(v.get("tags", []), list)
+                or not all(isinstance(t, str) for t in v.get("tags", []))):
+            raise ValueError("Invalid model verdict")
+        verdicts[v["i"]] = v
     reviewed = []
     for i, n in enumerate(items):
         v = verdicts.get(i)
         if v is None:
             reviewed.append(n)
             continue
-        keep = bool(v.get("about_company")) and bool(v.get("material"))
+        keep = v["about_company"] and v["material"]
         tags = [t for t in v.get("tags") or [] if t in NEWS_TAGS] or n["tags"]
         reviewed.append({**n, "tags": tags if keep else [], "why": str(v.get("why") or "")[:160] if keep else "",
                          "checked": "deepseek"})
     summary = out.get("summary")
+    if summary is not None and not isinstance(summary, str):
+        raise ValueError("Invalid model summary")
     return reviewed, (str(summary)[:240] if summary else None)
 
 
@@ -440,7 +471,17 @@ def load_cards(tickers, folder=VALIDATION_DIR):
     """Validator cards for tickers in the universe. A card with another schema is refused, not guessed."""
     cards, refused = {}, []
     for p in sorted(Path(folder).glob("*.json")) if Path(folder).exists() else []:
-        card = json.loads(p.read_text(encoding="utf-8"))
+        try:
+            card = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(card, dict):
+                raise ValueError("card object required")
+            if card.get("schema") == CARD_SCHEMA:
+                from page import validator_html
+                validator_html({str(card.get("ticker")): card}, local=True)
+                redact_card(card)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, ArithmeticError) as e:
+            refused.append(f"{p.name} ({type(e).__name__})")
+            continue
         if card.get("ticker") not in tickers:
             continue
         if card.get("schema") != CARD_SCHEMA:
@@ -452,14 +493,17 @@ def load_cards(tickers, folder=VALIDATION_DIR):
 
 def redact_card(card):
     """Public copy (spec 9.4): licensed claims removed, their verdict counts kept per check."""
-    public = {**card, "checks": []}
+    public = {k: card.get(k) for k in ("schema", "spec", "ticker", "cik", "as_of", "facts_as_of")}
+    public.update(price=None, checks=[])
     for check in card["checks"]:
-        open_claims = [c for c in check["claims"] if c["source"].get("licence") != "licensed"]
+        open_claims = [c for c in check["claims"] if c.get("source", {}).get("licence") == "public"]
         counts = {}
         for c in check["claims"]:
-            if c["source"].get("licence") == "licensed":
+            if c.get("source", {}).get("licence") != "public":
                 counts[c["verdict"]] = counts.get(c["verdict"], 0) + 1
-        public["checks"].append({**check, "claims": open_claims, "licensed_counts": counts})
+        public["checks"].append({**check, "claims": open_claims, "licensed_counts": counts,
+                                "measurements": [m for m in check.get("measurements", [])
+                                                 if m.get("source", {}).get("licence") == "public"]})
     return public
 
 
@@ -555,6 +599,8 @@ def run(watchlist, with_news=True):
     rows = rows.join(extra) if not extra.empty else rows
 
     news = {}
+    coverage = {t: {"news": "skipped_not_flagged" if with_news else "skipped_disabled",
+                    "bars": "success" if t in frames else "missing"} for t in rows.index}
     if with_news:
         flagged = rows[rows.watchlist | rows.earnings_date.notna() | rows.vcp_actionable.eq(True)
                        | rows.bb_pct.le(SQUEEZE_PCT) | ((rows.chg.abs() >= 0.05) & (rows.volume_ratio >= 1.5))]
@@ -565,14 +611,17 @@ def run(watchlist, with_news=True):
             for attempt in range(3):
                 try:
                     news[t] = fetch_news(rows.loc[t, "name"], now_ts)
+                    coverage[t]["news"] = "success_empty" if not news[t] else "keyword_fallback"
                     break
                 except urllib.error.HTTPError as e:
                     if e.code not in (429, 439) or attempt == 2:
                         log(f"news failed for {t}: {e}")
+                        coverage[t]["news"] = "error"
                         break
                     time.sleep(10)
                 except Exception as e:
                     log(f"news failed for {t}: {e}")
+                    coverage[t]["news"] = "error"
                     break
             time.sleep(0.8)
 
@@ -592,6 +641,7 @@ def run(watchlist, with_news=True):
             for t, res in zip(todo, pool.map(review, todo)):
                 if res:
                     news[t], briefs[t] = res
+                    coverage[t]["news"] = "ai_reviewed" if all(n.get("checked") for n in news[t]) else "ai_partial"
         news_check = f"DeepSeek ({LLM_MODEL}) on {len(briefs)} of {len(todo)} names"
     elif news:
         log("no DEEPSEEK_API_KEY: news tagged by keywords only")
@@ -603,7 +653,14 @@ def run(watchlist, with_news=True):
     records = []
     for t, r in rows.iterrows():
         rec = {k: plain(v) for k, v in r.to_dict().items()}
+        factor = rec.get("price_factor")
+        if factor and np.isfinite(factor) and factor > 0:
+            for field in ("hi20", "lo20", "atr14", "vcp_pivot", "vcp_last_low"):
+                if rec.get(field) is not None:
+                    rec[field] *= factor
+            rec["level_price_basis"] = "raw-equivalent using latest completed bar adjustment"
         rec["ticker"], rec["news"], rec["news_brief"] = t, news.get(t, []), briefs.get(t)
+        rec["coverage"] = coverage[t]
         rec["points"], rec["why"], rec["flags"] = score(rec)
         records.append(rec)
     records.sort(key=lambda r: (-r["points"], -(r["mcap"] or 0)))
@@ -612,32 +669,60 @@ def run(watchlist, with_news=True):
     result = {
         "generated_hkt": dt.datetime.now(HK).strftime("%Y-%m-%d %H:%M"),
         "generated_et": now_ny.strftime("%Y-%m-%d %H:%M"),
+        "generated_utc": now_ny.astimezone(dt.timezone.utc).isoformat(),
         "quote_time": str(uni.update_time.max()),
         "bar_date": sq.bar_date.mode().iloc[0] if len(sq) else None,
         "universe": len(uni), "with_history": len(frames), "news_checked": with_news, "news_check": news_check,
         "weights": WEIGHTS, "squeeze_pct": SQUEEZE_PCT, "picks": picks, "rows": records,
         "cards": {t: redact_card(c) for t, c in cards.items()},  # runs/ and docs/ are public
     }
+    from daily import calendar, session_dates
+    next_day = session_dates(today + dt.timedelta(days=1), 1)[0]
+    result["stale_after"] = (calendar().session_open(next_day) + pd.Timedelta(hours=1)).isoformat()
     stamp = now_ny.strftime("%Y%m%d_%H%M")
-    (HERE / "runs").mkdir(exist_ok=True)
-    (HERE / "runs" / f"{stamp}.json").write_text(json.dumps(result, default=str, indent=1), encoding="utf-8")
+    public_json = json.dumps(result, default=str, indent=1)
     result["scoreboard"] = board  # derived from past runs; recomputed every run, not stored
     from page import render
-    (HERE / "docs").mkdir(exist_ok=True)  # GitHub Pages serves docs/ from main
-    (HERE / "docs" / "index.html").write_text(render(result), encoding="utf-8")
-    (HERE / "local").mkdir(exist_ok=True)  # git-ignored: licensed claim values stay on this machine
-    (HERE / "local" / "index.html").write_text(render({**result, "cards": cards}, local=True), encoding="utf-8")
+    public_page = render(result)
+    local_page = render({**result, "cards": cards}, local=True)
+    from daily import atomic_write
+    atomic_write(HERE / "local" / "index.html", local_page)
+    atomic_write(HERE / "runs" / f"{stamp}.json", public_json)
+    atomic_write(HERE / "docs" / "index.html", public_page)  # last-good page replaced only after both renders
     log(f"picks: {', '.join(picks)}; wrote runs/{stamp}.json, docs/index.html (public), local/index.html")
     return stamp
 
 
-def publish(stamp):
+def publish(stamp, include_status=False):
     """Commit this run's page and record, then push to the GitHub remote."""
     import subprocess
-    git = lambda *a: subprocess.run(["git", *a], cwd=HERE, check=True)
-    git("add", "docs/index.html", f"runs/{stamp}.json")
-    git("commit", "-m", f"Radar run {stamp} ET")
-    git("push")
+    def git(*a):
+        return subprocess.run(["git", *a], cwd=HERE, check=True, capture_output=True, text=True,
+                              timeout=120, env={**os.environ, "GIT_TERMINAL_PROMPT": "0",
+                                                "GCM_INTERACTIVE": "never"}).stdout.strip()
+    # Reject unrelated unpushed commits: a push publishes history, not just this commit's paths.
+    git("fetch", "origin")
+    branch = git("branch", "--show-current")
+    if branch != "main":
+        raise RuntimeError("Publication requires main")
+    git("merge-base", "--is-ancestor", "origin/main", "HEAD")
+    if git("rev-parse", "HEAD") != git("rev-parse", "origin/main"):
+        pending = git("diff", "--name-only", "origin/main..HEAD").splitlines()
+        messages = git("log", "--format=%s", "origin/main..HEAD").splitlines()
+        if (not all(p in ("docs/index.html", "docs/status.json") or re.fullmatch(r"runs/\d{8}_\d{4}\.json", p)
+                    for p in pending) or not all(m.startswith("Radar refresh ") for m in messages)):
+            raise RuntimeError("Publication would include unrelated unpushed commits")
+    paths = (["docs/index.html", f"runs/{stamp}.json"] if stamp else [])
+    if include_status:
+        paths.append("docs/status.json")
+    if not paths:
+        return
+    git("add", "--", *paths)
+    if git("diff", "--cached", "--name-only", "--", *paths):
+        git("commit", "--only", "-m", f"Radar refresh {stamp or 'failure'} ET", "--", *paths)
+    git("push", "origin", "HEAD:main")
+    if git("ls-remote", "origin", "refs/heads/main").split()[0] != git("rev-parse", "HEAD"):
+        raise RuntimeError("Remote ref verification failed")
 
 
 if __name__ == "__main__":
@@ -646,6 +731,8 @@ if __name__ == "__main__":
     ap.add_argument("--publish", action="store_true", help="commit and push docs/ to GitHub Pages")
     args = ap.parse_args()
     wl = [t.strip().upper() for t in (HERE / "watchlist.txt").read_text().split() if t.strip()]
-    stamp = run(wl, with_news=not args.no_news)
-    if args.publish:
-        publish(stamp)
+    from daily import scan_lock
+    with scan_lock(HERE / "local" / "scan.lock"):
+        stamp = run(wl, with_news=not args.no_news)
+        if args.publish:
+            publish(stamp)

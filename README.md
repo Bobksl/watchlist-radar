@@ -1,6 +1,6 @@
 # Watchlist Radar
 
-On-demand scan of tech, semiconductor and AI-adjacent US stocks for names likely to move in the next
+Daily or on-demand scan of tech, semiconductor and AI-adjacent US stocks for names likely to move in the next
 few sessions. Produces a static page with **Stocks to watch** (about 5), your watchlist, upcoming
 earnings with option-implied moves, VCP setups, volatility squeezes, and cited news.
 
@@ -18,6 +18,70 @@ and push the page to GitHub Pages, or `--no-news` to skip news. Best run ~30 min
 
 Watchlist: `watchlist.txt`. Universe: the moomoo industry groups in `PLATES` (radar.py), filtered to
 market cap >= $2bn and price >= $5; watchlist names always included.
+
+## Automatic daily delivery (Windows)
+
+The computer must remain on, this Windows user must remain logged in, and moomoo OpenD must remain
+logged in on localhost:11111. The Admiralty detector path in `radar.py` must exist. There is no cloud
+collector. Git credentials must work without an interactive prompt; GitHub Pages must serve `docs/`
+from `main`. Optional validator cards and DeepSeek credentials are not required for a valid scan.
+
+Install the calendar in ignored local storage and preflight from this repository:
+
+```powershell
+C:\Python314\python.exe -m pip install --target local/dependencies -r requirements-calendar.txt
+powershell -NoProfile -File .\schedule.ps1 -Action DryRun
+powershell -NoProfile -File .\schedule.ps1 -Action Register
+powershell -NoProfile -File .\schedule.ps1 -Action Status
+```
+
+Task name: **Watchlist Radar Daily**, current interactive user, limited privileges. Registration
+does not replace an existing task; remove it explicitly before changing its configuration. The
+trigger checks every 15 minutes indefinitely. The exchange-aware collector attempts **one scan
+per NYSE session at/after 10:00 America/New_York**, ending eligibility at that day's exchange
+close. This is 22:00 HKT during US daylight saving and 23:00 HKT otherwise, with up to 15 minutes
+trigger delay. Holidays/weekends are skipped; early closes are honored. Completed daily bars become
+eligible 15 minutes after the actual exchange close. Nasdaq's forward window uses exchange sessions.
+Calendar dependency: `exchange_calendars==4.13.2`; unavailable/out-of-range calendar fails explicitly.
+
+```powershell
+# Manual due check through the task; usually skips outside the session.
+powershell -NoProfile -File .\schedule.ps1 -Action Run
+# Explicit scan/retry now (may call paid AI); bypasses today's once-only collection guard.
+C:\Python314\python.exe -B daily.py --force
+# Stop recurring work.
+powershell -NoProfile -File .\schedule.ps1 -Action Remove
+```
+
+Both command-line and scheduled scans share an OS lock. No source/AI retry occurs automatically
+after a failed daily collection. Publication may retry on two following ticks, without recollecting
+or spending on AI. `local/refresh.json` records scan and publication outcomes separately; public
+`docs/status.json` carries only safe health fields, never raw exception messages. Git publication
+commits only the intended page, current run and status, preserving unrelated staged changes; it
+rejects unrelated unpushed commits and a diverged/non-main branch. Push success verifies the remote
+ref; it does not establish completion of GitHub Pages deployment. A push outage retains the last
+remote page, so local logs are authoritative for publication failures.
+
+Both pages render before replacement. Failed collection/rendering retains the previous good page.
+Failure health is published with that page when Git is available. The browser checks `status.json`
+every **60 seconds**, reloads when it sees a newer successful snapshot, and displays failure or
+unavailable status. It marks content stale at the next exchange session's 10:30 ET even when health
+publication stops. Legacy snapshots fall back to a conservative 36-hour age threshold.
+Reloading the page never triggers collection; an already open browser notices a deployed update.
+
+News coverage distinguishes checked-empty, keyword fallback, AI-reviewed/partial, skipped and
+error for each name; legacy coverage is unknown. Missing/malformed optional cards are refused.
+Claims need an explicit `public` licence for public values. Licensed/unknown claims are counts only;
+check measurements need explicit public provenance. Option-derived ranges require valid bid/ask
+and a last-trade timestamp no older than four calendar days (a conservative check, not a live-quote
+guarantee). Technical levels are converted using the latest completed-bar adjustment factor;
+intraday corporate actions and provider adjustments remain a limitation.
+
+Offline verification, without OpenD, paid AI, market publication or task registration:
+
+```powershell
+C:\Python314\python.exe -B -m pytest -q test_radar.py test_daily.py --basetemp=local/test-new-run
+```
 
 ## Flags
 
