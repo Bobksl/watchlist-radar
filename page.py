@@ -349,10 +349,9 @@ Past day-1 moves cover reports in the last 2 years (dates from Yahoo Finance). R
 <h2>VCP setups</h2>
 <p class="note">Admiralty VCP detector, unchanged: forming coils and confirmed bases still under their pivot.
 Actionable = at least 3 contractions and within 5% below the pivot. Dry-up = base volume / pre-base volume.
-Leg floor (VCP study, 2 Oct 2026): every leg of a confirmed 2-leg base at least 2.5 ATR deep; 2-leg bases that
-fail it showed no edge over matched controls and earn no points. Not applied to 3+ legs, where it removed the
-best bases. The runner plan on pick cards is that study's best exit so far: stop at the coil low, no partial
-sale, 3R switches on a trailing stop (mean +0.55R per trade, 44% winners, 495 trades).</p>
+Leg floor: every leg of a confirmed 2-leg base must be at least 2.5 ATR deep to earn points.
+The check is not applied to forming coils or 3+ legs. Runner levels use a coil-low stop, no partial sale,
+and a 3R trailing-stop trigger. Historical performance has not been revalidated against current inputs.</p>
 {table(["Ticker", "Setup", "Legs", "Actionable", "Status", "Pivot", "Dry-up", "Trend stack", "Leg floor", "Score"],
        vcp_rows, "No coils today.")}
 

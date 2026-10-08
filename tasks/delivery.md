@@ -23,3 +23,7 @@ Project-local skills under tasks/skills were validated and explicitly supplied t
 ## Remaining limits
 
 First live scan needs OpenD; a listening but unresponsive SDK is bounded only by the scheduled task timeout. Per-symbol absolute bar/quote freshness and missing-SPY robustness remain open. Mobile/keyboard behavior, real AI/vendor responses and official strategy performance have not been verified. Market pulse, change view, independent news discovery and faithful frozen-scoreboard outcomes are later work. No permanent chat monitor was created.
+
+## Activation receipt
+
+Implementation commit 37daf25 was pushed and remote SHA verified. GitHub Pages run 37733786200 succeeded; the production browser displayed refresh health and explicit October 2 timestamps. Registered task executed at 13:43 HKT with exit result 0 (not due, no collection). Offline browser automatically reloaded a newer synthetic run with no warning/error logs. Legacy performance numbers were removed from the page after the research handoff identified unvalidated historical lineage; rule thresholds are retained.
