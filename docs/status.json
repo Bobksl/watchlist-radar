@@ -1,6 +1,11 @@
 {
-  "scan": "awaiting_first_scheduled_scan",
-  "run": "20261002_1110",
-  "publication": "setup",
-  "error": null
+  "last_attempt": "2026-10-08T05:55:23.736126+00:00",
+  "scan": "success",
+  "publication": "pending",
+  "push_attempts": 0,
+  "last_success": "2026-10-08T06:00:42.409678+00:00",
+  "run": "20261008_0155",
+  "error": null,
+  "manual_attempt_session": "2026-10-08",
+  "manual_scan_before_scheduled_window": true
 }
