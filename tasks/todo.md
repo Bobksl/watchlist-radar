@@ -9,6 +9,7 @@ First priority: daily Windows scans and automatic public webpage refresh, with e
 - [x] Inspect both first deliveries and send bounded follow-ups prioritizing daily webpage delivery.
 - [x] Create, validate and explicitly wire three project-local skills to the chats/delivery worker.
 - [x] Implement daily refresh; 19 offline tests pass; Windows task registered. First live scan remains blocked by unavailable OpenD; publication/deployment receipt is recorded separately in delivery.md.
+- [x] Add approved free-plan TradingView handoff and preview-first local importer; 35 tests pass. See tradingview-extension.md for scope and verification limits.
 - [ ] 1. Make coverage and public output trustworthy.
 - [ ] 2. Correct exchange timing, displayed price basis and option-quote quality.
 - [ ] 3. Add market pulse, watchlist/discovery lanes and changes since last scan.

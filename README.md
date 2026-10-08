@@ -123,6 +123,25 @@ Headlines are dropped by keyword first (law-firm ads, market wraps). If `DEEPSEE
 headlines not about the company or not material, re-tags the rest, and writes a one-line summary.
 Without a key, keyword tags are used.
 
+## TradingView handoff
+
+Pick cards link to daily candles for a YTD overview and configurable 15/5/1-minute candles for
+single-day timing. Choose the YTD or 1D visible range in TradingView; the links do not synchronize
+your account, saved layout or built-in indicators. The initial verified exchange mappings cover
+ASML, SNDK, CRWV, ADEA and AAPL. Other symbols are visibly omitted rather than assigned an exchange.
+
+Copy or download the verified shortlist from the page. Native TXT import depends on your
+TradingView plan; manual symbol addition is the fallback. To bring a local ticker list into Radar:
+
+```powershell
+C:\Python314\python.exe tradingview.py .\my-tradingview-list.txt
+C:\Python314\python.exe tradingview.py .\my-tradingview-list.txt --write
+```
+
+The first command previews. The second validates, backs up the existing watchlist under ignored
+`local/`, then replaces `watchlist.txt`. It accepts bare US tickers or NASDAQ/NYSE/AMEX prefixes.
+It does not fetch your TradingView account. Official TradingView MCP requires Essential or above.
+
 ## Data limits
 
 moomoo OpenD on this account: 100 stocks of price history per 30 days and no US options quotes,

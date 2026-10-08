@@ -3,7 +3,10 @@ import datetime as dt
 import json
 from decimal import Decimal
 from html import escape
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
+
+from tradingview import chart_url, export_symbols
 
 HK = ZoneInfo("Asia/Hong_Kong")
 
@@ -19,7 +22,7 @@ body { margin:0; background:var(--bg); color:var(--ink); line-height:1.5;
 main { max-width:1180px; margin:0 auto; padding:20px 16px 48px; }
 h1 { font-size:24px; margin:0 0 4px; } h2 { font-size:18px; margin:32px 0 10px; }
 .meta, .note, .source { color:var(--muted); font-size:13px; }
-.cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; }
+.cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr)); gap:12px; }
 .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px 16px; }
 .card h3 { margin:0; font-size:17px; display:flex; justify-content:space-between; gap:8px; }
 .card ul { margin:8px 0 0; padding-left:18px; } .card li { margin:2px 0; }
@@ -36,7 +39,61 @@ th { color:var(--muted); font-weight:600; cursor:pointer; position:sticky; top:0
 tr:last-child td { border-bottom:0; }
 a { color:var(--accent); }
 .empty { padding:12px 16px; color:var(--muted); }
+.chart-actions, .tv-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:12px; }
+.chart-actions a, button, select, .download { border:1px solid var(--line); border-radius:4px;
+  padding:6px 10px; background:var(--panel); color:var(--accent); font:inherit; }
+button { cursor:pointer; } button:disabled { opacity:.5; cursor:default; }
+a:focus-visible, button:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline:2px solid var(--accent); outline-offset:3px; }
+.tv-panel { border-left:3px solid var(--accent); padding:12px 16px; background:var(--panel); margin-top:16px; }
+.tv-panel summary { cursor:pointer; font-weight:600; }
+.tv-panel textarea { display:block; width:100%; margin-top:8px; padding:8px; color:var(--ink);
+  background:var(--bg); border:1px solid var(--line); font:13px/1.5 monospace; }
 """
+
+TRADINGVIEW_JS = """
+document.getElementById('tv-interval').addEventListener('change', event => {
+  document.querySelectorAll('a[data-tv-intraday]').forEach(link => {
+    const url = new URL(link.href); url.searchParams.set('interval', event.target.value); link.href = url.href;
+  });
+});
+document.getElementById('tv-copy').addEventListener('click', async () => {
+  const field = document.getElementById('tv-shortlist'), status = document.getElementById('tv-copy-status');
+  try { await navigator.clipboard.writeText(field.value); status.textContent = 'Shortlist copied.'; }
+  catch(e) { field.focus(); field.select(); status.textContent = 'Select and copy the shortlist manually.'; }
+});
+"""
+
+
+def chart_actions(ticker):
+    daily, intraday = chart_url(ticker, "D"), chart_url(ticker, "15")
+    if not daily:
+        return '<p class="note">Chart mapping unavailable</p>'
+    name = escape(ticker)
+    return (f'<div class="chart-actions"><a href="{escape(daily)}" target="_blank" rel="noopener noreferrer" '
+            f'aria-label="{name} daily chart on TradingView">Daily chart ↗</a>'
+            f'<a href="{escape(intraday)}" data-tv-intraday target="_blank" rel="noopener noreferrer" '
+            f'aria-label="{name} intraday chart on TradingView">Intraday chart ↗</a></div>')
+
+
+def tradingview_handoff(picks):
+    text, missing = export_symbols(picks)
+    warning = f'Unmapped: {escape(", ".join(missing))}. Excluded from export.' if missing else 'All shortlist symbols verified.'
+    download = (f'<a class="download" download="radar-shortlist.txt" href="data:text/plain;charset=utf-8,{quote(text)}">'
+                'Download TXT</a>') if text else ''
+    return f'''<details class="tv-panel" open><summary>Free-plan chart handoff</summary>
+<p class="note">For a YTD overview, open the daily chart and choose the YTD date range in TradingView.
+For single-day timing, open the intraday chart and choose the 1D date range. Candle interval is separate.
+Your saved layout and indicators are managed in TradingView; this is not an account sync.</p>
+<div class="tv-controls"><label for="tv-interval">Intraday candles</label>
+<select id="tv-interval"><option value="15">15 minutes</option><option value="5">5 minutes</option>
+<option value="1">1 minute</option></select></div>
+<label for="tv-shortlist">Verified attention shortlist</label>
+<textarea id="tv-shortlist" rows="2" readonly>{escape(text)}</textarea>
+<div class="tv-controls"><button id="tv-copy"{' disabled' if not text else ''}>Copy shortlist</button>{download}
+<span id="tv-copy-status" role="status" aria-live="polite"></span></div>
+<p class="note">{warning} Native TXT import depends on your TradingView plan; otherwise add symbols manually.
+Only the five verified pilot mappings are linked initially.</p></details>'''
 
 SORT_JS = """
 document.querySelectorAll('table.sortable th').forEach((th, col) => th.addEventListener('click', () => {
@@ -91,7 +148,7 @@ def pick_card(r):
             f'<span>${r["last_price"]:,.2f} <span class="{cls}">{pct(chg, True)}</span></span></h3>'
             f'<div class="meta">{escape(str(r.get("name") or ""))} · {escape(str(r.get("plate") or ""))}'
             f' · {r["points"]:g} pts</div>{brief(r)}<ul>{why}</ul>{levels(r)}{card_line(r.get("card"))}'
-            f'{news_list(r.get("news", []))}</div>')
+            f'{news_list(r.get("news", []))}{chart_actions(r["ticker"])}</div>')
 
 
 CHECK_NAMES = {"historical_facts": "Historical facts", "target_arithmetic": "Target arithmetic",
@@ -220,7 +277,11 @@ def table(headers, rows, empty):
 
 def ticker_cell(r):
     star = " ★" if r.get("watchlist") else ""
-    return f'<td class="l" data-v="{escape(r["ticker"])}"><b>{escape(r["ticker"])}</b>{star}</td>'
+    ticker = escape(r["ticker"])
+    url = chart_url(r["ticker"], "D")
+    label = (f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer" '
+             f'aria-label="{ticker} daily chart on TradingView">{ticker}</a>') if url else ticker
+    return f'<td class="l" data-v="{ticker}"><b>{label}</b>{star}</td>'
 
 
 def render(run, local=False):
@@ -324,6 +385,7 @@ New snapshots convert adjusted technical levels to raw-equivalent prices using t
 Legacy snapshots may mix adjusted levels and raw quotes. Intraday corporate actions can invalidate this conversion.</p>
 
 <h2>Stocks to watch</h2>
+{tradingview_handoff(run["picks"])}
 <p class="note">Names most likely to move in the next few sessions, ranked by flags: earnings soon ({w["earnings"]} pts), a theme peer reporting ({w.get("peer_earnings", 0)}),
 an actionable VCP coil ({w["vcp_actionable"]}; other VCP {w["vcp"]}), a volatility squeeze ({w["squeeze"]}),
 material news in 48h ({w["news"]}, +{w["news_multi"]} if broad), moving today ({w["mover"]}), heavy volume on a quiet
@@ -375,4 +437,4 @@ from the headlines only; follow the link for details.</p>
 dates and options from Yahoo Finance (yfinance); earnings calendar from
 <a href="https://www.nasdaq.com/market-activity/earnings">Nasdaq</a>; news from moomoo news search, linked per item.
 Flags are hand-weighted and not yet validated against history. For research only; not investment advice.</p>
-</main><script>{SORT_JS}</script><script>{freshness_js}</script></body></html>"""
+</main><script>{SORT_JS}</script><script>{freshness_js}</script><script>{TRADINGVIEW_JS}</script></body></html>"""
