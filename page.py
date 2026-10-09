@@ -316,6 +316,12 @@ def private_research_html(research):
         authors = ', '.join(str(a) for a in data.get('analyst_report_by_line') or [])
         blocks.append(f'<div class="card"><h3>{escape(report["ticker"])} · Morningstar</h3><p>{escape(authors)} · Report {escape(str(data.get("analyst_report_update_time_str") or "date unknown"))}</p>'
                       f'<p class="note">Retrieved {escape(report["retrieved_utc"])}. Personal access verified; redistribution rights unknown. Analyst forecasts remain unverified and separate from SEC facts.</p></div>')
+    for item in research.get('benzinga', []):
+        blocks.append(f'<div class="card"><h3>{escape(item["ticker"])} · Benzinga</h3>'
+                      f'<p class="meta">{escape(item["firm"])} · Event {escape(item["date"])} · {escape(item["freshness"])}</p>'
+                      f'<p>{escape(item["action"])} · {escape(item["rating"])}</p>'
+                      f'<p class="note">Retrieved {escape(item["collected_utc"])}. Latest page only; coverage is incomplete. Rights unknown; commentary unverified. Price targets withheld pending source, currency and split checks.</p>'
+                      f'<details><summary>Analyst commentary</summary><p>{escape(item["text"])}</p></details></div>')
     return '<h2>Private research queue</h2><p class="note">Local only. These sources do not affect attention scores. Missing/unreadable evidence files: '+str(len(research.get('unavailable', [])))+'.</p><div class="cards">'+''.join(blocks)+'</div>'
 
 

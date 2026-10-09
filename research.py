@@ -34,6 +34,10 @@ def load_private():
                 result[kind].append(record)
         except (OSError, ValueError, KeyError, TypeError):
             result['unavailable'].append(path.name)
+    from benzinga import load_private as load_benzinga
+    benzinga = load_benzinga(ROOT / 'local/research/benzinga')
+    result['benzinga'] = benzinga['items']
+    result['unavailable'] += benzinga['unavailable']
     return result
 
 

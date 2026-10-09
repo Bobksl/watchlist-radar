@@ -188,6 +188,37 @@ Morningstar access succeeded for all three pilot stocks on 8 October, but rights
 The current Street Validator intake cannot represent unknown licensing/independent research safely;
 no new real cards were produced. See `tasks/releases-2026-10-08.md` for the next bounded disposition.
 
+### Private Benzinga watchlist intake
+
+Set `BENZINGA_API_KEY` in the process environment, then run:
+
+```powershell
+C:\Python314\python.exe -B benzinga.py
+# Smaller selection, including discoveries outside the watchlist:
+C:\Python314\python.exe -B benzinga.py --tickers MU AVGO ASML
+```
+
+The default reads `watchlist.txt`: maximum 40 distinct symbols, one request per symbol,
+ten latest Analyst Insights per request, 20-second timeout, no pagination or retries.
+HTTP 401/403/429 stops the batch; other failures retain the prior ticker evidence and
+continue. Status lists failures and names not attempted. Empty success is an empty page,
+not proof of no coverage or complete entitlement. This collector is manual; it adds no
+scheduled requests or API spending to the existing daily scan.
+
+Evidence and content-addressed snapshots remain under ignored `local/research/benzinga/`.
+Each snapshot hash is checked before display. Returned ticker identity must match; event
+IDs deduplicate revisions within each page. This is a latest-page view, not an exhaustive
+event history. Event dates within seven calendar days are `recent_7d`; older dates are
+`historical`, future dates require review. Labels use the current UTC date when rendered.
+Retrieved time is separate. Targets are preserved in private source evidence but withheld
+from display pending instrument, currency and split checks. Commentary is unverified;
+rights remain unknown. No scoring or Street Validator claims are derived from this intake.
+
+Each CLI run writes `local/benzinga.html` for immediate private review. The next market
+scan also includes the queue on `local/index.html`; public output excludes it. Credentials
+are read from the environment, never written into evidence, statuses or source code.
+Endpoint reference: [Benzinga Analyst Insights V1](https://docs.benzinga.com/api-reference/calendar_api/analyst-insights/analyst-insights-v1).
+
 ## Data limits
 
 moomoo OpenD on this account: 100 stocks of price history per 30 days and no US options quotes,
