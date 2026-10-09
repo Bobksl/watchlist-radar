@@ -37,6 +37,7 @@ def load_private():
     from benzinga import load_private as load_benzinga
     benzinga = load_benzinga(ROOT / 'local/research/benzinga')
     result['benzinga'] = benzinga['items']
+    result['benzinga_briefing'] = benzinga['briefing']
     result['unavailable'] += benzinga['unavailable']
     return result
 

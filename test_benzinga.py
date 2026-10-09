@@ -108,3 +108,42 @@ def test_fetch_refuses_redirects_secret_echo_and_oversized_responses(monkeypatch
     for raw in (b'{"echo":"PRIVATEKEY"}', b'x' * 2_000_001):
         with pytest.raises(ValueError):
             benzinga.fetch('MU', 'PRIVATEKEY')
+
+
+def test_briefing_reviews_expire_on_source_change_and_exclude_old_future(tmp_path_factory):
+    folder = tmp_path_factory.mktemp('b')
+    items, _ = benzinga.normalize({'analyst-insights': [event(), event(id='old', date='2020-01-01'),
+                 event(id='future', date='2027-01-01')]}, 'MU', NOW.date())
+    current = next(x for x in items if x['id'] == 'one')
+    path = folder / 'review.json'
+    review = {'MU': {'source_hashes': {'one': benzinga.event_hash(current)},
+                    'summary':'<script>REVIEW_NOTE</script>', 'why_watch':'Maintains is not an upgrade.', 'verify':'Check filing.'}}
+    path.write_text(json.dumps(review))
+    groups = benzinga.briefing(items, path)
+    assert len(groups) == 1 and groups[0]['events'] == 1 and groups[0]['event_ids'] == ['one']
+    assert groups[0]['summary'] == review['MU']['summary']
+    from page import benzinga_html
+    html = benzinga_html([{**current, 'collected_utc':NOW.isoformat()}], groups)
+    assert '<script>REVIEW_NOTE' not in html and '&lt;script&gt;REVIEW_NOTE' in html
+    changed = [{**x, 'text':'revised'} if x['id']=='one' else x for x in items]
+    assert 'review pending' in benzinga.briefing(changed, path)[0]['summary']
+    assert 'review pending' in benzinga.briefing([current, {**current, 'id':'new'}], path)[0]['summary']
+    path.write_text('[]')
+    assert 'review pending' in benzinga.briefing(items, path)[0]['summary']
+
+
+def test_offline_preview_has_private_filters_and_no_api_call(tmp_path_factory, monkeypatch):
+    import sys
+    root = tmp_path_factory.mktemp('b')
+    folder = root / 'local/research/benzinga'
+    monkeypatch.setattr(benzinga, 'ROOT', root)
+    monkeypatch.setattr(benzinga, 'FOLDER', folder)
+    benzinga.save('MU', {'analyst-insights':[event(), event(id='old', date='2020-01-01')]}, NOW, folder)
+    monkeypatch.setattr(benzinga, 'collect', lambda *a, **k: pytest.fail('Offline preview called API collector'))
+    monkeypatch.delenv('BENZINGA_API_KEY', raising=False)
+    monkeypatch.setattr(sys, 'argv', ['benzinga.py', '--preview-only'])
+    assert benzinga.main() == 0
+    html = (root/'local/benzinga.html').read_text(encoding='utf-8')
+    assert 'id="benzinga-search"' in html and 'id="benzinga-recent"' in html
+    assert 'data-recent="false" data-bz-kind="event" hidden' in html
+    assert 'benzinga-search' not in render(snapshot([]), research={'benzinga':benzinga.load_private(folder)['items']})

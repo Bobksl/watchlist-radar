@@ -299,6 +299,63 @@ def ticker_cell(r):
     return f'<td class="l" data-v="{ticker}"><b>{label}</b>{star}</td>'
 
 
+def benzinga_html(items, briefing):
+    if not items:
+        return ''
+    recent = sum(x['freshness'] == 'recent_7d' for x in items)
+    cards = []
+    for group in briefing:
+        cards.append(f'<article class="card benzinga-item" data-ticker="{escape(group["ticker"])}" data-recent="true" data-bz-kind="briefing">'
+                     f'<h3>{escape(group["ticker"])}</h3><p class="meta">{group["events"]} records · {len(group["firms"])} firms · Latest {escape(group["latest_date"])}</p>'
+                     f'<p><b>What changed:</b> {escape(", ".join(group["actions"]))}. {escape(group["summary"])}</p>'
+                     f'<p><b>Why watch:</b> {escape(group["why_watch"])}</p><p><b>Check next:</b> {escape(group["verify"])}</p>'
+                     f'<details><summary>Source firms and event IDs</summary><p>{escape(", ".join(group["firms"]))}</p>'
+                     f'<p>{escape(", ".join(group["event_ids"]))}</p></details></article>')
+    briefs = ''.join(cards)
+    cards = []
+    for item in items:
+        is_recent = item['freshness'] == 'recent_7d'
+        label = {'recent_7d': 'Last 7 days', 'historical': 'Historical', 'future_date_review': 'Future date: review'}[item['freshness']]
+        cards.append(f'<article class="card benzinga-item" data-ticker="{escape(item["ticker"])}" data-recent="{str(is_recent).lower()}" data-bz-kind="event" {"" if is_recent else "hidden"}>'
+                     f'<h3>{escape(item["ticker"])} · Benzinga</h3><p class="meta">{escape(item["firm"])} · Event {escape(item["date"])} · {label}</p>'
+                     f'<p>{escape(item["action"])} · {escape(item["rating"])}</p>'
+                     f'<p class="note">Retrieved {escape(item["collected_utc"])}. Latest page only; coverage is incomplete. Rights unknown; commentary unverified. Structured price targets withheld pending source, currency and split checks.</p>'
+                     f'<details><summary>Analyst commentary (may contain unverified targets)</summary><p>{escape(item["text"])}</p></details></article>')
+    return (f'<section id="benzinga-research"><h2>Benzinga briefing</h2><p>{recent} recent records · {len(briefing)} stocks</p>'
+            '<p class="note">Analyst actions reported by Benzinga; factual claims and forecasts remain unverified. '
+            'Grouped by stock for review, not independent catalysts. Maintained ratings do not establish a target revision. '
+            'Changes since the prior collection are not yet established. Editorial notes expire when their source set changes. '
+            'Seven calendar days, using UTC; freshness updates when this page is regenerated.</p>'
+            '<div class="tv-controls"><label for="benzinga-search">Ticker</label> '
+            '<input id="benzinga-search" type="search" placeholder="e.g. MU" autocomplete="off"> '
+            '<label><input id="benzinga-recent" type="checkbox" checked> Last 7 days only</label></div>'
+            f'<p id="benzinga-count" role="status" aria-live="polite">Showing {recent} of {len(items)} insights.</p>'
+            '<p id="benzinga-empty" class="empty" hidden>No insights match these filters.</p>'
+            f'<div class="cards">{briefs}</div><h2>Source insights</h2><div class="cards">{"".join(cards)}</div></section>'
+            '''<script>
+(() => {
+  const section = document.getElementById('benzinga-research');
+  const search = section.querySelector('#benzinga-search');
+  const recent = section.querySelector('#benzinga-recent');
+  const items = [...section.querySelectorAll('.benzinga-item')];
+  const total = items.filter(x => x.dataset.bzKind === 'event').length;
+  function filter() {
+    const query = search.value.trim().toUpperCase();
+    let shown = 0;
+    for (const item of items) {
+      item.hidden = !item.dataset.ticker.includes(query) || (recent.checked && item.dataset.recent !== 'true');
+      if (!item.hidden && item.dataset.bzKind === 'event') shown++;
+    }
+    section.querySelector('#benzinga-count').textContent = `Showing ${shown} of ${total} insights.`;
+    section.querySelector('#benzinga-empty').hidden = shown !== 0;
+  }
+  search.addEventListener('input', filter);
+  recent.addEventListener('change', filter);
+  filter();
+})();
+</script>''')
+
+
 def private_research_html(research):
     if not research:
         return ''
@@ -316,13 +373,9 @@ def private_research_html(research):
         authors = ', '.join(str(a) for a in data.get('analyst_report_by_line') or [])
         blocks.append(f'<div class="card"><h3>{escape(report["ticker"])} · Morningstar</h3><p>{escape(authors)} · Report {escape(str(data.get("analyst_report_update_time_str") or "date unknown"))}</p>'
                       f'<p class="note">Retrieved {escape(report["retrieved_utc"])}. Personal access verified; redistribution rights unknown. Analyst forecasts remain unverified and separate from SEC facts.</p></div>')
-    for item in research.get('benzinga', []):
-        blocks.append(f'<div class="card"><h3>{escape(item["ticker"])} · Benzinga</h3>'
-                      f'<p class="meta">{escape(item["firm"])} · Event {escape(item["date"])} · {escape(item["freshness"])}</p>'
-                      f'<p>{escape(item["action"])} · {escape(item["rating"])}</p>'
-                      f'<p class="note">Retrieved {escape(item["collected_utc"])}. Latest page only; coverage is incomplete. Rights unknown; commentary unverified. Price targets withheld pending source, currency and split checks.</p>'
-                      f'<details><summary>Analyst commentary</summary><p>{escape(item["text"])}</p></details></div>')
-    return '<h2>Private research queue</h2><p class="note">Local only. These sources do not affect attention scores. Missing/unreadable evidence files: '+str(len(research.get('unavailable', [])))+'.</p><div class="cards">'+''.join(blocks)+'</div>'
+    return ('<h2>Private research queue</h2><p class="note">Local only. These sources do not affect attention scores. Missing/unreadable evidence files: '
+            +str(len(research.get('unavailable', [])))+'.</p><div class="cards">'+''.join(blocks)+'</div>'
+            +benzinga_html(research.get('benzinga', []), research.get('benzinga_briefing', [])))
 
 
 def render(run, local=False, research=None):

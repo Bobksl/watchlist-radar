@@ -211,13 +211,28 @@ IDs deduplicate revisions within each page. This is a latest-page view, not an e
 event history. Event dates within seven calendar days are `recent_7d`; older dates are
 `historical`, future dates require review. Labels use the current UTC date when rendered.
 Retrieved time is separate. Targets are preserved in private source evidence but withheld
-from display pending instrument, currency and split checks. Commentary is unverified;
+from structured display pending instrument, currency and split checks. Raw commentary
+may still quote unverified targets inside its disclosure. Commentary is unverified;
 rights remain unknown. No scoring or Street Validator claims are derived from this intake.
 
 Each CLI run writes `local/benzinga.html` for immediate private review. The next market
 scan also includes the queue on `local/index.html`; public output excludes it. Credentials
 are read from the environment, never written into evidence, statuses or source code.
 Endpoint reference: [Benzinga Analyst Insights V1](https://docs.benzinga.com/api-reference/calendar_api/analyst-insights/analyst-insights-v1).
+
+The private page defaults to recent records, with ticker search, a recent-only toggle,
+visible-result count and an empty state. Stock briefings group recent records while retaining
+each firm's actions and event IDs; maintained/reiterated ratings are not upgrades or proof
+of a target revision. Multiple firms may be reacting to the same announcement.
+Editorial notes live only in ignored `local/research/benzinga/briefing-review.json` and are
+bound to hashes of the exact event text, identity, action, rating, date and revision.
+Changed/new event sets automatically show review pending. Notes are editorial interpretation,
+not filing validation. This first briefing does not establish changes since a prior collection.
+Refresh the private preview without credentials or network calls:
+
+```powershell
+C:\Python314\python.exe -B benzinga.py --preview-only
+```
 
 ## Data limits
 

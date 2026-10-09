@@ -15,6 +15,39 @@ FOLDER = ROOT / 'local/research/benzinga'
 PAGE_SIZE = 10
 
 
+def event_hash(item):
+    fields = {k: item[k] for k in ('id', 'ticker', 'date', 'firm', 'action', 'rating', 'text', 'updated')}
+    return hashlib.sha256(json.dumps(fields, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+
+
+def briefing(items, review_path):
+    try:
+        reviews = json.loads(review_path.read_text(encoding='utf-8'))
+        if not isinstance(reviews, dict):
+            reviews = {}
+    except (OSError, ValueError):
+        reviews = {}
+    groups = {}
+    for item in items:
+        if item['freshness'] == 'recent_7d':
+            groups.setdefault(item['ticker'], []).append(item)
+    result = []
+    for ticker, events in groups.items():
+        actions = list(dict.fromkeys(x['action'] for x in events))
+        firms = list(dict.fromkeys(x['firm'] for x in events))
+        review = reviews.get(ticker, {})
+        hashes = {x['id']: event_hash(x) for x in events}
+        if (not isinstance(review, dict) or review.get('source_hashes') != hashes
+                or any(not isinstance(review.get(k), str) for k in ('summary', 'why_watch', 'verify'))):
+            review = {'summary': 'New or changed source set; editorial review pending.',
+                      'why_watch': 'Review the supplied actions and commentary before drawing conclusions.',
+                      'verify': 'Check the original announcement or filing and the exact forecast period.'}
+        result.append({'ticker': ticker, 'events': len(events), 'firms': firms, 'actions': actions,
+                       'latest_date': max(x['date'] for x in events), 'event_ids': list(hashes),
+                       **{k: review[k] for k in ('summary', 'why_watch', 'verify')}})
+    return result
+
+
 def symbols(values):
     tickers = list(dict.fromkeys(v.upper() for v in values))
     if not tickers or len(tickers) > 40 or any(not re.fullmatch(r'[A-Z][A-Z0-9.-]{0,9}', t) for t in tickers):
@@ -113,8 +146,9 @@ def load_private(folder=None, today=None):
             items += [{**x, 'collected_utc': record['collected_utc']} for x in normalized]
         except (ValueError, TypeError, KeyError, OSError):
             unavailable.append(path.name)
-    return {'items': sorted(items, key=lambda x: (x['date'], x['updated']), reverse=True),
-            'unavailable': unavailable}
+    items.sort(key=lambda x: (x['date'], x['updated']), reverse=True)
+    return {'items': items, 'unavailable': unavailable,
+            'briefing': briefing(items, folder / 'briefing-review.json')}
 
 
 def collect(tickers, key, folder=None, now=None):
@@ -141,16 +175,7 @@ def collect(tickers, key, folder=None, now=None):
     return statuses
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--tickers', nargs='+', help='Defaults to watchlist.txt; maximum 40')
-    args = parser.parse_args()
-    try:
-        result = collect(args.tickers or (ROOT / 'watchlist.txt').read_text(encoding='utf-8').split(),
-                         os.environ.get('BENZINGA_API_KEY'))
-    except (ValueError, OSError) as error:
-        parser.exit(1, type(error).__name__ + ': collection not started; check credentials/watchlist\n')
-    print(json.dumps(result))
+def write_preview():
     from daily import atomic_write
     from page import CSS, private_research_html
     evidence = load_private()
@@ -158,8 +183,24 @@ def main():
     atomic_write(preview, '<!doctype html><html lang="en"><meta charset="utf-8">'
                  '<meta name="viewport" content="width=device-width,initial-scale=1">'
                  '<title>Private Benzinga intake</title><style>' + CSS + '</style><body><main>'
-                 + private_research_html({'benzinga': evidence['items'], 'unavailable': evidence['unavailable']})
+                 + private_research_html({'benzinga': evidence['items'], 'benzinga_briefing': evidence['briefing'],
+                                          'unavailable': evidence['unavailable']})
                  + '</main></body></html>')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--tickers', nargs='+', help='Defaults to watchlist.txt; maximum 40')
+    parser.add_argument('--preview-only', action='store_true', help='Refresh private briefing without credentials or API requests')
+    args = parser.parse_args()
+    try:
+        result = [] if args.preview_only else collect(
+            args.tickers or (ROOT / 'watchlist.txt').read_text(encoding='utf-8').split(),
+            os.environ.get('BENZINGA_API_KEY'))
+    except (ValueError, OSError) as error:
+        parser.exit(1, type(error).__name__ + ': collection not started; check credentials/watchlist\n')
+    print(json.dumps(result))
+    write_preview()
     return int(any(x['status'] != 'retrieved' for x in result))
 
 
