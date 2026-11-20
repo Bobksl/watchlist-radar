@@ -1,5 +1,5 @@
 {
-  "last_attempt": "2026-11-19T15:16:16.332228+00:00",
+  "last_attempt": "2026-11-20T15:14:06.941511+00:00",
   "scan": "failed",
   "publication": "pending",
   "push_attempts": 0,
@@ -8,6 +8,6 @@
   "error": "scan: RuntimeError",
   "manual_attempt_session": "2026-10-08",
   "manual_scan_before_scheduled_window": true,
-  "last_push": "2026-11-18T15:12:49.544463+00:00",
-  "attempt_session": "2026-11-19"
+  "last_push": "2026-11-19T15:16:25.622725+00:00",
+  "attempt_session": "2026-11-20"
 }
